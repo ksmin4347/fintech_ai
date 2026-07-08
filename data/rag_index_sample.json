@@ -1,0 +1,7 @@
+{
+  "description": "RAG 인덱스 샘플 메타데이터 (데모)",
+  "chunk_size": 800,
+  "chunk_overlap": 120,
+  "retriever": "tfidf",
+  "top_k": 8
+}

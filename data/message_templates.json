@@ -1,0 +1,19 @@
+{
+  "templates": [
+    {
+      "id": "kakao_mock",
+      "name": "카카오 알림톡형",
+      "title_prefix": "[소상공인 금융상담 안내]"
+    },
+    {
+      "id": "sms_short",
+      "name": "SMS 짧은 안내형",
+      "title_prefix": "[금융상담]"
+    },
+    {
+      "id": "email",
+      "name": "이메일 안내형",
+      "title_prefix": "소상공인 금융상담 안내"
+    }
+  ]
+}
