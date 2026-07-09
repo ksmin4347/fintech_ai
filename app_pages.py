@@ -35,7 +35,7 @@ from services.policy_loader import (
     validate_policies,
 )
 from services.policy_rationale import build_eligibility_rationale
-from services.policy_scoring import score_policy_results
+from services.policy_scoring import CONDITION_WEIGHTS, RESULT_POINTS, score_policy_results
 from services.policy_rule_table import build_policy_rule_table, rule_table_summary
 from services.policy_document_loader import load_markdown_file, load_pdf_file
 from services.report_generator import generate_review_report, render_report_markdown
@@ -76,6 +76,29 @@ MSG_TYPE_OPTIONS = {
     "email": "이메일 안내형",
 }
 
+SCORING_WEIGHT_REASONS = {
+    "지역": "지역 제한 정책이 많아 고객 사업장 소재지와의 일치 여부를 우선 확인합니다.",
+    "사업자 형태": "개인사업자, 법인사업자, 소상공인 대상 여부가 핵심 자격 조건입니다.",
+    "업종": "지원 가능 업종과 제외 업종 판단에 직접 연결됩니다.",
+    "업력": "창업 초기, 업력 제한, 특정 기간 이상 운영 조건을 반영합니다.",
+    "자금용도": "운영자금, 시설자금, 보증 목적 등 정책 목적과의 적합성을 봅니다.",
+    "신청기간": "신청 가능 기간이 지나면 다른 조건이 맞아도 접수가 어렵습니다.",
+    "사업상태": "정상 운영 여부는 대부분의 정책 검토에서 기본 전제입니다.",
+    "세금 체납": "체납 여부는 제외 조건이나 추가 확인 사유가 될 수 있습니다.",
+    "연매출": "매출 규모 제한이 있는 정책에서 비교 기준으로 사용합니다.",
+    "신용": "신용점수 또는 신용구간 제한이 있는 정책에서 반영합니다.",
+    "중복지원": "기존 보증, 대출, 지원 이력과의 중복 가능성을 확인합니다.",
+}
+
+RESULT_POINT_LABELS = {
+    "충족": "공개조건과 고객 정보가 일치합니다.",
+    "해당 없음": "해당 정책에서 제한 조건이 없으므로 감점하지 않습니다.",
+    "추가 확인 필요": "가능성은 있지만 서류나 세부 답변 확인이 필요합니다.",
+    "미확인": "상담 내용에 정보가 없어 낮은 부분점수만 반영합니다.",
+    "판단 보류": "공개조건만으로는 판단하기 어려워 보수적으로 반영합니다.",
+    "미충족": "공개조건과 불일치하므로 해당 조건은 0점 처리합니다.",
+}
+
 TAB_NAMES = [
     "1. 상담 입력",
     "2. 사람 확인·구조화",
@@ -86,6 +109,58 @@ TAB_NAMES = [
     "7. 고객 안내문 / 발송",
     "8. 정책 데이터 관리",
 ]
+
+
+def _render_scoring_method_reference() -> None:
+    total_weight = sum(CONDITION_WEIGHTS.values())
+    weight_rows = [
+        {
+            "조건": name,
+            "가중치": f"{weight:.2f}",
+            "고려 이유": SCORING_WEIGHT_REASONS.get(name, "공개조건 비교에 필요한 기본 항목입니다."),
+        }
+        for name, weight in CONDITION_WEIGHTS.items()
+    ]
+    result_rows = [
+        {
+            "조건 결과": name,
+            "반영 비율": f"{point * 100:.0f}%",
+            "의미": RESULT_POINT_LABELS.get(name, "공개조건 비교 결과를 부분점수로 반영합니다."),
+        }
+        for name, point in RESULT_POINTS.items()
+    ]
+    cap_rows = [
+        {"상황": "공개조건 불일치 0개", "최대 점수": "제한 없음", "해석": "모든 확인 조건이 맞으면 원점수를 그대로 사용"},
+        {"상황": "공개조건 불일치 1개", "최대 점수": "64점", "해석": "불일치 원인을 먼저 확인해야 하는 정책"},
+        {"상황": "공개조건 불일치 2개", "최대 점수": "56점", "해석": "복수 조건 불일치로 우선순위 하락"},
+        {"상황": "공개조건 불일치 3개", "최대 점수": "48점", "해석": "상담 우선순위 낮음"},
+        {"상황": "공개조건 불일치 4개", "최대 점수": "40점", "해석": "추천보다 불일치 설명이 우선"},
+        {"상황": "공개조건 불일치 5개 이상", "최대 점수": "35점", "해석": "최소 검토 점수만 유지"},
+        {"상황": "불일치 없음 + 미확인/추가확인 있음", "최대 점수": "88점", "해석": "가능성은 있으나 서류나 답변 확인 필요"},
+    ]
+    grade_rows = [
+        {"등급": "우선 검토", "기준": "불일치와 미확인이 없고 85점 이상", "의미": "상담사가 먼저 확인할 후보"},
+        {"등급": "보통 검토", "기준": "불일치와 미확인이 없지만 85점 미만", "의미": "검토 가능하지만 우선순위는 중간"},
+        {"등급": "추가 확인 후 검토", "기준": "미확인 또는 추가 확인 항목 존재", "의미": "고객 답변이나 서류 확인 후 판단"},
+        {"등급": "공개조건 불일치 우선 확인", "기준": "미충족 항목 존재", "의미": "추천보다 불일치 사유 확인이 먼저"},
+    ]
+
+    with st.expander("정책 점수 산출 기준", expanded=True):
+        st.markdown(
+            "**4번 공개규칙 비교 점수는 승인 확률이 아니라 상담자가 먼저 볼 정책을 정렬하기 위한 검토 우선순위 점수입니다.**"
+        )
+        st.caption(
+            f"기본 계산식: Σ(조건별 가중치 × 조건 결과 반영 비율) ÷ 전체 조건 가중치 합({total_weight:.2f}) × 100"
+        )
+        st.dataframe(pd.DataFrame(weight_rows), width="stretch", hide_index=True)
+        st.dataframe(pd.DataFrame(result_rows), width="stretch", hide_index=True)
+        st.markdown("**점수 상한 규칙**")
+        st.dataframe(pd.DataFrame(cap_rows), width="stretch", hide_index=True)
+        st.markdown("**등급 해석**")
+        st.dataframe(pd.DataFrame(grade_rows), width="stretch", hide_index=True)
+        st.info(
+            "민감정보나 임의 추정값은 점수에 넣지 않습니다. 모든 감점 사유는 정책별 상세표의 근거와 함께 확인할 수 있습니다."
+        )
 
 
 def _as_dict_list(items):
@@ -1225,6 +1300,8 @@ def render_tab_policy_data(case: BusinessCase, run_analysis, index_policy_docs):
         st.info(DEMO_NOTICE)
     with st.expander("PDF 반영 점검표", expanded=False):
         st.dataframe(pd.DataFrame(PDF_ALIGNMENT_ROWS), width="stretch", hide_index=True)
+
+    _render_scoring_method_reference()
 
     df = policies_to_dataframe(st.session_state.policies)
     display_cols = [
