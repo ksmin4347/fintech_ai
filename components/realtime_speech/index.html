@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Realtime Speech</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #101828;
+      --muted: #667085;
+      --line: #dbe4f0;
+      --panel: #ffffff;
+      --soft: #f4f8fd;
+      --blue: #2563eb;
+      --navy: #1f3353;
+      --green: #12b76a;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: transparent;
+      color: var(--ink);
+    }
+    .speech-card {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      box-shadow: 0 10px 28px rgba(20, 35, 60, 0.08);
+      padding: 18px;
+    }
+    .speech-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .title {
+      font-size: 17px;
+      font-weight: 800;
+      line-height: 1.35;
+      margin: 0;
+    }
+    .subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-width: fit-content;
+      border-radius: 999px;
+      border: 1px solid #d8e2f0;
+      background: #fff;
+      padding: 8px 11px;
+      font-size: 13px;
+      font-weight: 800;
+      color: #475467;
+    }
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: #98a2b3;
+    }
+    .status.recording {
+      border-color: rgba(18, 183, 106, 0.35);
+      background: rgba(18, 183, 106, 0.08);
+      color: #057647;
+    }
+    .status.recording .dot {
+      background: var(--green);
+      box-shadow: 0 0 0 6px rgba(18, 183, 106, 0.12);
+    }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    button {
+      appearance: none;
+      border: 1px solid #cfd9e8;
+      border-radius: 10px;
+      min-height: 44px;
+      padding: 0 14px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 15px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, transform .16s ease;
+    }
+    button:hover {
+      border-color: #98b8ff;
+      background: #f7faff;
+    }
+    button:active { transform: translateY(1px); }
+    button.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+      box-shadow: 0 10px 20px rgba(37, 99, 235, .16);
+    }
+    button.stop {
+      border-color: rgba(239, 68, 68, .35);
+      color: #b42318;
+      background: #fff7f7;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .5;
+      transform: none;
+      box-shadow: none;
+    }
+    .transcript {
+      min-height: 116px;
+      max-height: 190px;
+      overflow: auto;
+      border: 1px solid #dce6f2;
+      border-radius: 12px;
+      background: #fff;
+      padding: 14px 15px;
+      font-size: 16px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+    }
+    .placeholder {
+      color: #98a2b3;
+    }
+    .interim {
+      color: #2563eb;
+      background: rgba(37, 99, 235, 0.08);
+      border-radius: 6px;
+      padding: 1px 4px;
+    }
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .error {
+      display: none;
+      margin-top: 10px;
+      border-radius: 10px;
+      background: #fff1f1;
+      color: #b42318;
+      padding: 10px 12px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .error.visible { display: block; }
+    @media (max-width: 640px) {
+      .speech-head { flex-direction: column; }
+      .actions { grid-template-columns: 1fr; }
+      button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <section class="speech-card">
+    <div class="speech-head">
+      <div>
+        <h1 class="title">실시간 받아쓰기</h1>
+        <p class="subtitle">말하는 동안 문장이 바로 표시됩니다. 확정된 텍스트는 상담 분석과 구조화에 자동 반영됩니다.</p>
+      </div>
+      <div id="status" class="status"><span class="dot"></span><span id="statusText">대기 중</span></div>
+    </div>
+    <div class="actions">
+      <button id="startBtn" class="primary" type="button">녹음 시작</button>
+      <button id="stopBtn" class="stop" type="button" disabled>중지·저장</button>
+      <button id="clearBtn" type="button">비우기</button>
+    </div>
+    <div id="transcript" class="transcript"><span class="placeholder">여기에 상담 음성이 실시간으로 표시됩니다.</span></div>
+    <div id="error" class="error"></div>
+    <div class="footer">
+      <span>Chrome·Edge 권장 / 로컬호스트와 HTTPS 배포 환경에서 마이크 사용 가능</span>
+      <span id="meta">0자</span>
+    </div>
+  </section>
+
+  <script>
+    const STREAMLIT_READY = "streamlit:componentReady";
+    const STREAMLIT_RENDER = "streamlit:render";
+    const STREAMLIT_SET_VALUE = "streamlit:setComponentValue";
+    const STREAMLIT_SET_HEIGHT = "streamlit:setFrameHeight";
+
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const statusBox = document.getElementById("status");
+    const statusText = document.getElementById("statusText");
+    const transcriptBox = document.getElementById("transcript");
+    const errorBox = document.getElementById("error");
+    const meta = document.getElementById("meta");
+
+    let recognition = null;
+    let supported = false;
+    let recording = false;
+    let finalText = "";
+    let interimText = "";
+    let language = "ko-KR";
+    let caseId = "";
+    let lastRenderedCaseId = null;
+    let autosendIntervalMs = 800;
+    let lastSentAt = 0;
+    let lastSentText = "";
+    let restartTimer = null;
+
+    function send(type, payload = {}) {
+      window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
+    }
+
+    function setFrameHeight() {
+      const height = Math.ceil(document.documentElement.scrollHeight || document.body.scrollHeight || 360);
+      send(STREAMLIT_SET_HEIGHT, { height });
+    }
+
+    function ready() {
+      send(STREAMLIT_READY, { apiVersion: 1 });
+      setTimeout(setFrameHeight, 80);
+    }
+
+    function compact(text) {
+      return (text || "").replace(/\s+/g, " ").trim();
+    }
+
+    function fullTranscript() {
+      const finalPart = compact(finalText);
+      const interimPart = compact(interimText);
+      if (finalPart && interimPart) return `${finalPart}\n${interimPart}`;
+      return finalPart || interimPart;
+    }
+
+    function renderTranscript() {
+      const finalPart = compact(finalText);
+      const interimPart = compact(interimText);
+      if (!finalPart && !interimPart) {
+        transcriptBox.innerHTML = '<span class="placeholder">여기에 상담 음성이 실시간으로 표시됩니다.</span>';
+      } else {
+        const safeFinal = escapeHtml(finalPart);
+        const safeInterim = escapeHtml(interimPart);
+        transcriptBox.innerHTML = `${safeFinal}${safeFinal && safeInterim ? "\n" : ""}${safeInterim ? `<span class="interim">${safeInterim}</span>` : ""}`;
+      }
+      meta.textContent = `${fullTranscript().length.toLocaleString("ko-KR")}자`;
+      transcriptBox.scrollTop = transcriptBox.scrollHeight;
+      setFrameHeight();
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function setStatus(label, isRecording = false) {
+      statusText.textContent = label;
+      statusBox.classList.toggle("recording", isRecording);
+    }
+
+    function showError(message) {
+      errorBox.textContent = message || "";
+      errorBox.classList.toggle("visible", Boolean(message));
+      setFrameHeight();
+    }
+
+    function emit(eventType, force = false) {
+      const now = Date.now();
+      const text = fullTranscript();
+      if (!force && now - lastSentAt < autosendIntervalMs) return;
+      if (!force && text === lastSentText) return;
+      lastSentAt = now;
+      lastSentText = text;
+      send(STREAMLIT_SET_VALUE, {
+        dataType: "json",
+        value: {
+          event_type: eventType,
+          case_id: caseId,
+          transcript: text,
+          final_transcript: compact(finalText),
+          interim_transcript: compact(interimText),
+          is_recording: recording,
+          language,
+          event_id: now
+        }
+      });
+    }
+
+    function buildRecognition() {
+      const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      supported = Boolean(Recognition);
+      startBtn.disabled = !supported;
+      if (!supported) {
+        showError("이 브라우저는 실시간 음성 인식을 지원하지 않습니다. Chrome 또는 Edge에서 실행해 주세요.");
+        setStatus("지원 안 됨", false);
+        return null;
+      }
+      const rec = new Recognition();
+      rec.lang = language;
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
+
+      rec.onstart = () => {
+        recording = true;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        setStatus("듣는 중", true);
+        showError("");
+        emit("start", true);
+      };
+
+      rec.onresult = (event) => {
+        let interim = "";
+        let finalChunk = "";
+        for (let i = event.resultIndex; i < event.results.length; i += 1) {
+          const result = event.results[i];
+          const transcript = result[0] ? result[0].transcript : "";
+          if (result.isFinal) finalChunk += transcript + " ";
+          else interim += transcript + " ";
+        }
+        if (finalChunk.trim()) {
+          finalText = compact(`${finalText} ${finalChunk}`);
+          interimText = "";
+          emit("final", true);
+        } else {
+          interimText = compact(interim);
+          emit("interim", false);
+        }
+        renderTranscript();
+      };
+
+      rec.onerror = (event) => {
+        const code = event && event.error ? event.error : "unknown";
+        if (code === "no-speech") {
+          setStatus("말을 기다리는 중", true);
+          return;
+        }
+        if (code === "not-allowed" || code === "service-not-allowed") {
+          showError("마이크 권한이 거부되었습니다. 브라우저 주소창의 마이크 권한을 허용해 주세요.");
+        } else {
+          showError(`음성 인식 오류: ${code}`);
+        }
+        emit("error", true);
+      };
+
+      rec.onend = () => {
+        if (recording) {
+          clearTimeout(restartTimer);
+          restartTimer = setTimeout(() => {
+            try { rec.start(); } catch (error) { /* already started */ }
+          }, 250);
+          return;
+        }
+        startBtn.disabled = !supported;
+        stopBtn.disabled = true;
+        setStatus("저장됨", false);
+        emit("stop", true);
+      };
+      return rec;
+    }
+
+    function startListening() {
+      if (!recognition) recognition = buildRecognition();
+      if (!recognition || recording) return;
+      try {
+        recognition.lang = language;
+        recognition.start();
+      } catch (error) {
+        showError("이미 녹음이 시작되어 있습니다. 잠시 후 다시 시도해 주세요.");
+      }
+    }
+
+    function stopListening() {
+      recording = false;
+      clearTimeout(restartTimer);
+      if (compact(interimText)) {
+        finalText = compact(`${finalText} ${interimText}`);
+      }
+      interimText = "";
+      renderTranscript();
+      if (recognition) {
+        try { recognition.stop(); } catch (error) { /* already stopped */ }
+      }
+      startBtn.disabled = !supported;
+      stopBtn.disabled = true;
+      setStatus("저장됨", false);
+      emit("stop", true);
+    }
+
+    function clearTranscript() {
+      finalText = "";
+      interimText = "";
+      lastSentText = "";
+      renderTranscript();
+      emit("clear", true);
+    }
+
+    startBtn.addEventListener("click", startListening);
+    stopBtn.addEventListener("click", stopListening);
+    clearBtn.addEventListener("click", clearTranscript);
+
+    window.addEventListener("message", (event) => {
+      const data = event.data || {};
+      if (data.type !== STREAMLIT_RENDER) return;
+      const args = data.args || {};
+      language = args.language || "ko-KR";
+      caseId = args.case_id || "";
+      autosendIntervalMs = Number(args.autosend_interval_ms || 800);
+      if (lastRenderedCaseId !== caseId) {
+        lastRenderedCaseId = caseId;
+        finalText = compact(args.initial_text || "");
+        interimText = "";
+        lastSentText = finalText;
+        renderTranscript();
+      }
+      if (!recognition) recognition = buildRecognition();
+      emit("render", false);
+    });
+
+    ready();
+  </script>
+</body>
+</html>

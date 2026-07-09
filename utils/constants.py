@@ -1,6 +1,6 @@
 """Application constants."""
 
-SERVICE_NAME = "소상공인 금융상담 AI 코파일럿"
+SERVICE_NAME = "핀콕 : 소상공인 금융상담 AI 코파일럿"
 SERVICE_TAGLINE = "소상공인의 자금 고민을 근거 있는 상담과 실행 가능한 다음 행동으로 바꾸는 AI 상담 코파일럿"
 DISCLAIMER = (
     "AI 결과는 상담 참고용입니다. 최종 판단은 상담자가 공식 기준과 고객 제출자료를 확인해 수행해야 합니다."

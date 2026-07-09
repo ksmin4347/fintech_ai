@@ -18,9 +18,14 @@ load_dotenv(ROOT / ".env")
 
 from services.eligibility_engine import evaluate_all_policies
 from services.gap_analyzer import analyze_gaps, generate_gap_summary
+from services.live_consultation import normalize_finance_transcript_for_analysis
 from services.missing_info import detect_missing_info
 from services.parser import parse_consultation
-from services.policy_loader import load_policies
+from services.policy_loader import (
+    get_supabase_policy_cache_info,
+    load_cached_supabase_policies,
+    load_policies,
+)
 from services.policy_document_loader import load_policy_documents
 from services.question_generator import generate_next_questions
 from services.rag_chunker import chunk_documents
@@ -30,6 +35,7 @@ from services.llm_client import LLMClient
 from services.policy_rationale import build_recommendation_rationale
 from services.status_mapper import is_verified_field_status, map_policy_status
 from models.schemas import BusinessCase
+from utils.brand_assets import brand_logo_data_uri
 from utils.constants import DEMO_NOTICE, DISCLAIMER, SERVICE_NAME, SERVICE_TAGLINE
 from utils.ui_theme import (
     inject_global_styles,
@@ -49,6 +55,7 @@ from app_pages import (
     render_tab_policy_data,
     render_tab_report,
     render_tab_structure,
+    render_customer_view,
 )
 
 POLICY_DOCS_DIR = ROOT / "data" / "policy_docs"
@@ -80,9 +87,26 @@ def load_policy_state(force: bool = False) -> None:
         try:
             st.session_state.policies = load_policies()
             st.session_state.policy_load_error = ""
+            st.session_state.policy_load_warning = ""
+            st.session_state.policy_load_detail = ""
         except Exception as e:
-            st.session_state.policies = []
-            st.session_state.policy_load_error = str(e)
+            cached_policies = load_cached_supabase_policies() if is_supabase_policy_source() else []
+            if cached_policies:
+                cache_info = get_supabase_policy_cache_info()
+                cached_at = cache_info.get("cached_at")
+                cached_at_text = f" 캐시시각: {cached_at}." if cached_at else ""
+                st.session_state.policies = cached_policies
+                st.session_state.policy_load_error = ""
+                st.session_state.policy_load_warning = (
+                    f"Supabase 실시간 연결은 실패했지만 마지막 성공 캐시 "
+                    f"{len(cached_policies)}건으로 임시 운영 중입니다.{cached_at_text}"
+                )
+                st.session_state.policy_load_detail = str(e)
+            else:
+                st.session_state.policies = []
+                st.session_state.policy_load_error = str(e)
+                st.session_state.policy_load_warning = ""
+                st.session_state.policy_load_detail = str(e)
         st.session_state.policy_data_signature = signature
         st.session_state.rag_indexed = False
         st.session_state.rag_chunks = []
@@ -105,10 +129,13 @@ def init_session():
         "customer_guide": "", "customer_guide_version": 0,
         "notification_preview_version": 0,
         "active_tab": TAB_NAMES[0],
+        "view_mode": "상담사용",
         "pending_case_select": None,
         "analysis_case_id": None,
         "policy_data_signature": "",
         "policy_load_error": "",
+        "policy_load_warning": "",
+        "policy_load_detail": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -143,6 +170,22 @@ def _normalize_field_statuses(statuses: dict) -> dict:
     }
 
 
+def _analysis_source_text(case: BusinessCase) -> str:
+    parts = []
+    if case.raw_consultation and case.raw_consultation.strip():
+        parts.append(f"[상담 원문]\n{case.raw_consultation.strip()}")
+    if case.consultation_memo and case.consultation_memo.strip():
+        parts.append(f"[상담 메모]\n{case.consultation_memo.strip()}")
+    if case.transcript and case.transcript.strip():
+        normalized_transcript, corrections = normalize_finance_transcript_for_analysis(case.transcript.strip())
+        if corrections and normalized_transcript.strip():
+            parts.append(f"[실시간 음성 받아쓰기-금융문맥 보정]\n{normalized_transcript.strip()}")
+            parts.append(f"[실시간 음성 받아쓰기 원문]\n{case.transcript.strip()}")
+        else:
+            parts.append(f"[실시간 음성 받아쓰기]\n{case.transcript.strip()}")
+    return "\n\n".join(parts)
+
+
 def run_analysis(case: BusinessCase):
     st.session_state.analysis_case_id = case.case_id
     previous_status = _normalize_field_statuses(dict(case.field_status or {}))
@@ -153,7 +196,7 @@ def run_analysis(case: BusinessCase):
     previous_updated_by = dict(case.field_updated_by or {})
     previous_approved_by = dict(case.field_approved_by or {})
     previous_audit_log = list(case.field_audit_log or [])
-    parsed = parse_consultation(case.raw_consultation)
+    parsed = parse_consultation(_analysis_source_text(case))
     st.session_state.parser_mode = parsed.get("parser_mode", "rules")
     st.session_state.parser_error = parsed.get("parser_error", "")
     for field, val in parsed.items():
@@ -269,11 +312,12 @@ with st.sidebar:
     llm_client = LLMClient()
     llm_ready = llm_client.is_available()
     llm_message = llm_client.setup_message()
+    brand_logo = brand_logo_data_uri("fincoc_logo.png")
     st.markdown(
         f"""
         <div class="sidebar-brand">
             <div class="sidebar-brand-top">
-                <div class="sidebar-logo">₩</div>
+                <div class="sidebar-logo"><img src="{brand_logo}" alt="fincoc 로고" /></div>
                 <div>
                     <div class="sidebar-eyebrow">POLICY COPILOT</div>
                     <div class="sidebar-brand-title">{html.escape(SERVICE_NAME)}</div>
@@ -332,7 +376,13 @@ with st.sidebar:
         source_table = os.getenv("SUPABASE_POLICY_TABLE", "announcements")
         policy_count = len(st.session_state.get("policies", []) or [])
         policy_error = st.session_state.get("policy_load_error")
-        policy_status = f"{source_table} · {policy_count}건" if not policy_error else "로딩 오류"
+        policy_warning = st.session_state.get("policy_load_warning")
+        if policy_error:
+            policy_status = "로딩 오류"
+        elif policy_warning:
+            policy_status = f"캐시 운영 · {policy_count}건"
+        else:
+            policy_status = f"{source_table} · {policy_count}건"
         status_rows.append(("정책 DB", policy_status, not bool(policy_error) and policy_count > 0))
     else:
         status_rows.append(("정책 DB", DEMO_NOTICE, False))
@@ -347,8 +397,25 @@ with st.sidebar:
             "</div>"
         )
     st.markdown(f'<div class="sidebar-status-card">{"".join(status_html)}</div>', unsafe_allow_html=True)
-    if is_supabase_policy_source() and st.session_state.get("policy_load_error"):
-        st.error(f"Supabase 정책 DB 로딩 오류: {st.session_state.policy_load_error}")
+    policy_error = st.session_state.get("policy_load_error")
+    policy_warning = st.session_state.get("policy_load_warning")
+    policy_detail = st.session_state.get("policy_load_detail")
+    if is_supabase_policy_source() and policy_warning:
+        st.warning(policy_warning)
+        if policy_detail:
+            with st.expander("연결 오류 상세", expanded=False):
+                st.code(policy_detail)
+        if st.button("정책 DB 다시 연결", key="sb_retry_policy_db", width="stretch"):
+            load_policy_state(force=True)
+            st.rerun()
+    elif is_supabase_policy_source() and policy_error:
+        st.error("Supabase 정책 DB 로딩 오류입니다. 연결 정보를 확인한 뒤 다시 시도해 주세요.")
+        if policy_detail or policy_error:
+            with st.expander("오류 상세", expanded=False):
+                st.code(policy_detail or policy_error)
+        if st.button("정책 DB 다시 연결", key="sb_retry_policy_db", width="stretch"):
+            load_policy_state(force=True)
+            st.rerun()
 
     st.markdown('<div class="sidebar-section">안내</div>', unsafe_allow_html=True)
     st.markdown(
@@ -368,13 +435,17 @@ if (
     st.session_state.pending_case_select = analysis_case_id
     case = st.session_state.cases[analysis_case_id]
 if not case:
+    brand_logo = brand_logo_data_uri("fincoc_logo.png")
     st.markdown(
-        """
+        f"""
         <div class="app-topbar">
             <div class="app-title-row">
                 <div>
                     <div class="app-kicker">POLICY FINANCE COPILOT</div>
-                    <div class="app-title">소상공인 금융상담 AI 코파일럿</div>
+                    <div class="app-brand-title">
+                        <img class="app-logo" src="{brand_logo}" alt="fincoc 로고" />
+                        <div class="app-title">{html.escape(SERVICE_NAME)}</div>
+                    </div>
                     <div class="app-subtitle">사이드바에서 새 상담 케이스를 만든 뒤 상담 입력을 시작하세요.</div>
                 </div>
             </div>
@@ -397,6 +468,34 @@ render_case_header(
     missing_count=len(st.session_state.get("missing_info", [])),
     policy_count=len(st.session_state.get("policies", []) or []),
 )
+
+st.markdown(
+    """
+    <div class="view-mode-note">
+        <strong>화면 모드</strong>
+        <span>상담사는 전체 기능을 사용하고, 고객용은 상담 진행 현황과 다음 준비사항만 보여줍니다.</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+view_mode = st.radio(
+    "화면 모드",
+    ["상담사용", "고객용"],
+    key="view_mode",
+    horizontal=True,
+    label_visibility="collapsed",
+)
+
+if view_mode == "고객용":
+    render_customer_view(
+        case,
+        analyzed=st.session_state.analyzed,
+        missing_info=st.session_state.get("missing_info", []),
+        next_questions=st.session_state.get("next_questions", []),
+        eligibility_results=st.session_state.get("eligibility_results", []),
+    )
+    st.stop()
+
 active_tab = st.radio(
     "화면 선택",
     TAB_NAMES,

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from models.rag_schemas import PolicyDocument
 
@@ -17,6 +19,24 @@ SUPPORTED_EXTENSIONS = {".md", ".txt", ".pdf"}
 
 class PolicyDocumentLoadError(RuntimeError):
     pass
+
+
+def _requests_session() -> requests.Session:
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=0.6,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+        raise_on_status=False,
+    )
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 def _use_supabase() -> bool:
@@ -42,16 +62,22 @@ def _supabase_config() -> tuple[str, str, str]:
 
 def _supabase_select(table: str, *, limit: int = 5000) -> list[dict[str, Any]]:
     url, key, _ = _supabase_config()
-    response = requests.get(
-        f"{url}/rest/v1/{table}",
-        headers={
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Prefer": "count=exact",
-        },
-        params={"select": "*", "limit": str(limit)},
-        timeout=30,
-    )
+    try:
+        response = _requests_session().get(
+            f"{url}/rest/v1/{table}",
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Prefer": "count=exact",
+            },
+            params={"select": "*", "limit": str(limit)},
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        host = re.sub(r"^https?://", "", url).split("/", 1)[0]
+        raise PolicyDocumentLoadError(
+            f"Supabase 연결 실패({host}). 인터넷 연결, 방화벽/VPN, Supabase 프로젝트 상태를 확인한 뒤 재시도해 주세요. 원인: {e}"
+        ) from e
     if response.status_code >= 400:
         raise PolicyDocumentLoadError(
             f"Supabase policy document load failed ({table}, HTTP {response.status_code}): "

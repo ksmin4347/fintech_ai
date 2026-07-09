@@ -5,15 +5,20 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from models.schemas import PolicyProduct
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+CACHE_DIR = DATA_DIR / "cache"
+SUPABASE_POLICY_CACHE_PATH = CACHE_DIR / "supabase_policies_cache.json"
 LIST_FIELDS = {
     "allowed_industries",
     "excluded_industries",
@@ -49,8 +54,30 @@ class PolicyDataLoadError(RuntimeError):
     pass
 
 
+def _requests_session() -> requests.Session:
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=0.6,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+        raise_on_status=False,
+    )
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 def get_policies_path() -> Path:
     return DATA_DIR / "policies_sample.json"
+
+
+def get_supabase_policy_cache_path() -> Path:
+    return SUPABASE_POLICY_CACHE_PATH
 
 
 def _use_supabase() -> bool:
@@ -72,16 +99,22 @@ def _supabase_config() -> tuple[str, str, str]:
 
 def _supabase_select(table: str, *, limit: int = 5000) -> list[dict[str, Any]]:
     url, key, _ = _supabase_config()
-    response = requests.get(
-        f"{url}/rest/v1/{table}",
-        headers={
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Prefer": "count=exact",
-        },
-        params={"select": "*", "limit": str(limit)},
-        timeout=30,
-    )
+    try:
+        response = _requests_session().get(
+            f"{url}/rest/v1/{table}",
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Prefer": "count=exact",
+            },
+            params={"select": "*", "limit": str(limit)},
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        host = re.sub(r"^https?://", "", url).split("/", 1)[0]
+        raise PolicyDataLoadError(
+            f"Supabase 연결 실패({host}). 인터넷 연결, 방화벽/VPN, Supabase 프로젝트 상태를 확인한 뒤 재시도해 주세요. 원인: {e}"
+        ) from e
     if response.status_code >= 400:
         raise PolicyDataLoadError(
             f"Supabase policy table load failed ({table}, HTTP {response.status_code}): "
@@ -383,14 +416,75 @@ def _to_policy_product(row: dict[str, Any], index: int) -> PolicyProduct:
     return PolicyProduct(**item)
 
 
-def load_policies_from_supabase() -> list[PolicyProduct]:
-    _, _, table = _supabase_config()
-    rows = _supabase_select(table)
-    active_rows = [
+def _active_supabase_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
         row for row in rows
         if row.get("is_active", True) is not False and row.get("deleted_at") in (None, "")
     ]
+
+
+def _rows_to_policy_products(rows: list[dict[str, Any]]) -> list[PolicyProduct]:
+    active_rows = _active_supabase_rows(rows)
     return [_to_policy_product(row, idx) for idx, row in enumerate(active_rows, 1)]
+
+
+def _write_supabase_policy_cache(table: str, rows: list[dict[str, Any]]) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "source": "supabase",
+            "table": table,
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+            "row_count": len(rows),
+            "rows": rows,
+        }
+        with open(SUPABASE_POLICY_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+    except OSError:
+        pass
+
+
+def get_supabase_policy_cache_info() -> dict[str, Any]:
+    if not SUPABASE_POLICY_CACHE_PATH.exists():
+        return {}
+    try:
+        with open(SUPABASE_POLICY_CACHE_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        "path": str(SUPABASE_POLICY_CACHE_PATH),
+        "table": payload.get("table"),
+        "cached_at": payload.get("cached_at"),
+        "row_count": payload.get("row_count"),
+    }
+
+
+def load_cached_supabase_policies() -> list[PolicyProduct]:
+    if not SUPABASE_POLICY_CACHE_PATH.exists():
+        return []
+    try:
+        with open(SUPABASE_POLICY_CACHE_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    rows = payload.get("rows") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return []
+    usable_rows = [row for row in rows if isinstance(row, dict)]
+    if not usable_rows:
+        return []
+    return _rows_to_policy_products(usable_rows)
+
+
+def load_policies_from_supabase() -> list[PolicyProduct]:
+    _, _, table = _supabase_config()
+    rows = _supabase_select(table)
+    _write_supabase_policy_cache(table, rows)
+    return _rows_to_policy_products(rows)
 
 
 def load_policies(path: Path | None = None) -> list[PolicyProduct]:

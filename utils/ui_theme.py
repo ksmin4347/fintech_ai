@@ -9,6 +9,7 @@ import streamlit as st
 
 from models.schemas import BusinessCase
 from services.status_mapper import map_policy_status
+from utils.brand_assets import brand_logo_data_uri
 from utils.constants import REQUIRED_FIELDS, SERVICE_NAME
 
 
@@ -189,21 +190,24 @@ def inject_global_styles() -> None:
             right: 0;
             bottom: 0;
             width: 1px;
-            background:
-                linear-gradient(
-                    180deg,
-                    rgba(255, 255, 255, .18) 0,
-                    rgba(255, 255, 255, .18) var(--top-nav-height),
-                    var(--line) var(--top-nav-height),
-                    var(--line) 100%
-                );
+            background: var(--line);
             pointer-events: none;
             z-index: 2;
+        }}
+        [data-testid="stSidebar"] > div {{
+            position: relative;
+            z-index: 3;
         }}
         [data-testid="stSidebar"] > div:first-child {{
             padding-top: 1.1rem;
             padding-left: 1.25rem;
             padding-right: 1.25rem;
+        }}
+        [data-testid="stSidebarHeader"],
+        [data-testid="stSidebarHeader"] *,
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stSidebarCollapseButton"] button {{
+            background: transparent !important;
         }}
         [data-testid="stSidebarHeader"],
         [data-testid="stSidebarCollapseButton"],
@@ -228,17 +232,22 @@ def inject_global_styles() -> None:
             margin-bottom: 10px;
         }}
         .sidebar-logo {{
-            width: 32px;
-            height: 32px;
-            border-radius: 8px;
-            background: #F3F4F6;
-            color: #1F2D49;
+            width: 50px;
+            height: 50px;
+            flex: 0 0 50px;
+            border-radius: 12px;
+            background: #ffffff;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-size: 18px;
-            font-weight: 900;
             box-shadow: inset 0 0 0 1px var(--line);
+            overflow: hidden;
+        }}
+        .sidebar-logo img {{
+            width: 44px;
+            height: 44px;
+            object-fit: contain;
+            display: block;
         }}
         .sidebar-eyebrow {{
             color: var(--blue);
@@ -248,10 +257,12 @@ def inject_global_styles() -> None:
         }}
         .sidebar-brand-title {{
             color: var(--text-main);
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 900;
-            line-height: 1.25;
+            line-height: 1.28;
             margin-top: 2px;
+            word-break: keep-all;
+            overflow-wrap: normal;
         }}
         .sidebar-brand-desc {{
             color: var(--text-sub);
@@ -362,11 +373,25 @@ def inject_global_styles() -> None:
             letter-spacing: .06em;
             margin-bottom: 6px;
         }}
+        .app-brand-title {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }}
+        .app-logo {{
+            width: 62px;
+            height: 58px;
+            object-fit: contain;
+            flex: 0 0 auto;
+            display: block;
+        }}
         .app-title {{
             font-size: 24px;
             font-weight: 850;
             line-height: 1.22;
             margin: 0;
+            word-break: keep-all;
         }}
         .app-topbar .app-title {{
             color: var(--text-main);
@@ -589,6 +614,25 @@ def inject_global_styles() -> None:
             color: var(--blue);
             font-weight: 800;
         }}
+        div[data-testid="stRadio"] label[data-testid="stRadioOption"][data-selected="true"] {{
+            font-weight: 900 !important;
+            color: var(--text-main) !important;
+        }}
+        div[data-testid="stRadio"] label[data-testid="stRadioOption"][data-selected="true"] * {{
+            font-weight: 900 !important;
+        }}
+        div[data-testid="stRadio"] label:has(input:checked),
+        div[data-testid="stRadio"] label:has(input[aria-checked="true"]),
+        div[data-testid="stRadio"] [role="radio"][aria-checked="true"] {{
+            font-weight: 900 !important;
+            color: var(--text-main) !important;
+        }}
+        div[data-testid="stRadio"] label:has(input:checked) *,
+        div[data-testid="stRadio"] label:has(input[aria-checked="true"]) *,
+        div[data-testid="stRadio"] [role="radio"][aria-checked="true"] *,
+        div[data-testid="stRadio"] [aria-checked="true"] p {{
+            font-weight: 900 !important;
+        }}
         [data-testid="stDataFrame"], [data-testid="stDataEditor"] {{
             border: 1px solid var(--line);
             border-radius: 12px;
@@ -662,6 +706,206 @@ def inject_global_styles() -> None:
             margin-top: -4px;
             margin-bottom: 12px;
         }}
+        .view-mode-note {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 4px 0 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #ffffff;
+            color: var(--text-sub);
+            font-size: 13px;
+        }}
+        .customer-hero {{
+            border: 1px solid #D6E4F5;
+            border-radius: 16px;
+            background:
+                linear-gradient(135deg, rgba(37, 99, 235, .10) 0%, rgba(20, 184, 166, .08) 100%),
+                #ffffff;
+            padding: 22px 24px;
+            margin: 12px 0 18px;
+            box-shadow: 0 14px 36px rgba(31, 45, 73, .08);
+        }}
+        .customer-hero-top {{
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 20px;
+        }}
+        .customer-kicker {{
+            color: var(--blue);
+            font-size: 12px;
+            font-weight: 900;
+            letter-spacing: .05em;
+            margin-bottom: 6px;
+        }}
+        .customer-title {{
+            color: var(--text-main);
+            font-size: 28px;
+            font-weight: 900;
+            line-height: 1.25;
+        }}
+        .customer-subtitle {{
+            color: var(--text-sub);
+            font-size: 15px;
+            line-height: 1.55;
+            margin-top: 7px;
+        }}
+        .customer-percent {{
+            min-width: 116px;
+            text-align: right;
+            color: var(--blue);
+            font-size: 36px;
+            font-weight: 950;
+            line-height: 1;
+        }}
+        .customer-bar {{
+            width: 100%;
+            height: 13px;
+            border-radius: 999px;
+            background: #EAF0F7;
+            overflow: hidden;
+            margin-top: 18px;
+        }}
+        .customer-bar-fill {{
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #2563EB 0%, #14B8A6 100%);
+        }}
+        .customer-chip-row {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 14px;
+        }}
+        .customer-chip {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid #DDE7F3;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .78);
+            padding: 7px 10px;
+            color: #475467;
+            font-size: 12px;
+            font-weight: 800;
+        }}
+        .customer-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin: 14px 0;
+        }}
+        .customer-grid.two {{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }}
+        .customer-card {{
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: #ffffff;
+            padding: 16px 17px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+        }}
+        .customer-card.soft {{
+            background: #FBFCFE;
+        }}
+        .customer-card-title {{
+            color: #344054;
+            font-size: 13px;
+            font-weight: 850;
+            margin-bottom: 8px;
+        }}
+        .customer-card-value {{
+            color: var(--text-main);
+            font-size: 22px;
+            font-weight: 900;
+            line-height: 1.25;
+            word-break: keep-all;
+            overflow-wrap: anywhere;
+        }}
+        .customer-card-desc {{
+            color: var(--text-sub);
+            font-size: 13px;
+            line-height: 1.5;
+            margin-top: 6px;
+        }}
+        .customer-section-title {{
+            color: var(--text-main);
+            font-size: 22px;
+            font-weight: 900;
+            margin: 26px 0 10px;
+        }}
+        .customer-steps {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin: 12px 0 16px;
+        }}
+        .customer-step {{
+            border: 1px solid #DDE7F3;
+            border-radius: 14px;
+            background: #ffffff;
+            padding: 14px;
+        }}
+        .customer-step.done {{
+            border-color: rgba(22, 163, 74, .30);
+            background: linear-gradient(180deg, #ffffff 0%, #F0FDF4 100%);
+        }}
+        .customer-step.active {{
+            border-color: rgba(37, 99, 235, .38);
+            background: linear-gradient(180deg, #ffffff 0%, #EFF6FF 100%);
+        }}
+        .customer-step-label {{
+            color: var(--text-main);
+            font-size: 14px;
+            font-weight: 900;
+        }}
+        .customer-step-desc {{
+            color: var(--text-sub);
+            font-size: 12px;
+            line-height: 1.45;
+            margin-top: 4px;
+        }}
+        .customer-policy {{
+            border: 1px solid #DDE7F3;
+            border-radius: 14px;
+            background: #ffffff;
+            padding: 16px;
+            margin-bottom: 10px;
+        }}
+        .customer-policy-top {{
+            display: flex;
+            justify-content: space-between;
+            gap: 14px;
+        }}
+        .customer-policy-name {{
+            color: var(--text-main);
+            font-size: 16px;
+            font-weight: 900;
+            line-height: 1.4;
+        }}
+        .customer-policy-meta {{
+            color: var(--text-sub);
+            font-size: 13px;
+            margin-top: 4px;
+        }}
+        .customer-score {{
+            min-width: 72px;
+            text-align: right;
+            color: var(--blue);
+            font-size: 24px;
+            font-weight: 950;
+        }}
+        .customer-list {{
+            margin: 0;
+            padding-left: 18px;
+            color: #344054;
+            line-height: 1.6;
+            font-size: 14px;
+        }}
         @media (max-width: 900px) {{
             .app-title-row {{
                 flex-direction: column;
@@ -678,6 +922,23 @@ def inject_global_styles() -> None:
             .block-container {{
                 padding-left: 1rem;
                 padding-right: 1rem;
+            }}
+            .customer-hero-top {{
+                flex-direction: column;
+            }}
+            .customer-percent {{
+                text-align: left;
+            }}
+            .customer-grid,
+            .customer-grid.two,
+            .customer-steps {{
+                grid-template-columns: 1fr;
+            }}
+            .customer-policy-top {{
+                flex-direction: column;
+            }}
+            .customer-score {{
+                text-align: left;
             }}
         }}
         </style>
@@ -701,13 +962,18 @@ def render_case_header(
     parser = html.escape(parser_mode or "대기")
     status = "분석 완료" if analyzed else "분석 전"
     consultation_date = case.consultation_date or date.today()
+    service_name = html.escape(SERVICE_NAME)
+    brand_logo = brand_logo_data_uri("fincoc_logo.png")
     st.markdown(
         f"""
         <div class="app-topbar">
             <div class="app-title-row">
                 <div>
                     <div class="app-kicker">POLICY FINANCE COPILOT</div>
-                    <div class="app-title">{SERVICE_NAME}</div>
+                    <div class="app-brand-title">
+                        <img class="app-logo" src="{brand_logo}" alt="fincoc 로고" />
+                        <div class="app-title">{service_name}</div>
+                    </div>
                     <div class="app-subtitle">{customer} · {business} · {tab_name}</div>
                 </div>
                 <div class="case-meta">

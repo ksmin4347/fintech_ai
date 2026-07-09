@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import html
 import os
 import re
 import tempfile
@@ -12,8 +13,20 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+try:
+    from streamlit_mic_recorder import speech_to_text
+except Exception:  # pragma: no cover - optional browser component
+    speech_to_text = None
+
 from models.schemas import BusinessCase
 from services.document_generator import generate_counselor_memo, generate_customer_guide
+from services.live_consultation import (
+    apply_live_profile_to_case,
+    analyze_live_customer_profile,
+    merge_transcript,
+    should_refresh_live_analysis,
+)
+from services.realtime_speech_component import realtime_speech_to_text
 from services.policy_loader import (
     load_policies,
     load_policies_from_upload,
@@ -45,6 +58,7 @@ from utils.constants import (
     FIELD_SOURCE_OPTIONS,
     FIELD_STATUS_OPTIONS,
     RAG_SCORE_LABEL,
+    REQUIRED_FIELDS,
 )
 from utils.formatters import format_amount, format_months
 
@@ -163,6 +177,111 @@ PDF_ALIGNMENT_ROWS = [
 ]
 
 
+def _sync_live_voice_state(case: BusinessCase) -> None:
+    if st.session_state.get("live_voice_case_id") == case.case_id:
+        return
+    st.session_state.live_voice_case_id = case.case_id
+    st.session_state.live_voice_transcript = case.transcript or ""
+    st.session_state.live_voice_last_text = ""
+    st.session_state.live_voice_analysis = None
+    st.session_state.live_voice_last_analysis_at = None
+    st.session_state.live_voice_last_analysis_len = 0
+
+
+def _render_live_voice_panel(case: BusinessCase, save_case) -> None:
+    _sync_live_voice_state(case)
+    st.markdown("#### 실시간 음성 상담")
+    st.caption("말하는 동안 받아쓰기가 바로 표시되고, 약 7초마다 고객/사업자 기본정보만 구조화합니다.")
+
+    payload = realtime_speech_to_text(
+        initial_text=st.session_state.get("live_voice_transcript", case.transcript or ""),
+        case_id=case.case_id,
+        language="ko-KR",
+        autosend_interval_ms=800,
+        key=f"live_voice_browser_stt_{case.case_id}",
+    )
+    if isinstance(payload, dict) and payload.get("case_id") == case.case_id:
+        payload_text = payload.get("transcript")
+        if isinstance(payload_text, str):
+            if payload.get("event_type") == "clear":
+                merged = ""
+            else:
+                merged = payload_text.strip()
+            if merged != st.session_state.get("live_voice_transcript", ""):
+                st.session_state.live_voice_transcript = merged
+                st.session_state.live_voice_last_text = payload.get("interim_transcript") or payload.get("final_transcript") or ""
+                st.session_state.t1_transcript = merged
+                case.transcript = merged
+                save_case(case)
+
+    live_text = st.text_area(
+        "받아쓰기 원문",
+        key="live_voice_transcript",
+        height=150,
+        help="마이크 인식 결과를 상담자가 바로 수정할 수 있습니다. 이 내용은 상담 분석에도 함께 사용됩니다.",
+    )
+    case.transcript = live_text
+    st.session_state.t1_transcript = live_text
+    save_case(case)
+
+    last_at = st.session_state.get("live_voice_last_analysis_at")
+    if should_refresh_live_analysis(
+        live_text,
+        last_at,
+        int(st.session_state.get("live_voice_last_analysis_len", 0) or 0),
+        interval_seconds=7,
+    ):
+        with st.spinner("실시간 상담 맥락 분석 중..."):
+            st.session_state.live_voice_analysis = analyze_live_customer_profile(live_text)
+            st.session_state.live_voice_last_analysis_at = datetime.now()
+            st.session_state.live_voice_last_analysis_len = len(live_text.strip())
+            if apply_live_profile_to_case(
+                case,
+                st.session_state.live_voice_analysis.get("parsed", {}),
+                st.session_state.live_voice_analysis.get("corrections", []),
+            ):
+                save_case(case)
+
+    analysis = st.session_state.get("live_voice_analysis")
+    if analysis:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("확인된 신상정보", analysis.get("confirmed", 0))
+        m2.metric("추가 확인 필요", analysis.get("needs_review", 0))
+        m3.metric("최근 분석", analysis.get("analyzed_at", "-"))
+        st.markdown("**7초 요약 / 맥락**")
+        st.info(analysis.get("summary", "요약할 상담 내용이 아직 없습니다."))
+        corrections = analysis.get("corrections") or []
+        if corrections:
+            st.caption("음성 인식 문맥 보정")
+            st.dataframe(pd.DataFrame(corrections), width="stretch", hide_index=True)
+        rows = analysis.get("rows") or []
+        if rows:
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        if analysis.get("parser_error"):
+            st.warning(f"실시간 GPT 구조화 실패로 규칙 분석을 사용했습니다: {analysis['parser_error']}")
+
+    if speech_to_text is not None:
+        with st.expander("녹음 저장형 백업 사용", expanded=False):
+            st.caption("브라우저 실시간 인식이 불안정할 때만 사용하세요. 중지 후 텍스트가 반영됩니다.")
+            spoken_text = speech_to_text(
+                language="ko-KR",
+                start_prompt="백업 녹음 시작",
+                stop_prompt="백업 녹음 중지·저장",
+                just_once=False,
+                use_container_width=True,
+                key=f"live_voice_stt_{case.case_id}",
+            )
+            if spoken_text:
+                merged = merge_transcript(st.session_state.live_voice_transcript, spoken_text)
+                if merged != st.session_state.live_voice_transcript:
+                    st.session_state.live_voice_transcript = merged
+                    st.session_state.live_voice_last_text = spoken_text
+                    st.session_state.t1_transcript = merged
+                    case.transcript = merged
+                    save_case(case)
+                    st.rerun()
+
+
 def render_tab_input(case: BusinessCase, save_case, run_analysis):
     st.subheader("상담 내용 입력")
     pending_inputs = st.session_state.pop("pending_input_values", None)
@@ -178,6 +297,12 @@ def render_tab_input(case: BusinessCase, save_case, run_analysis):
         }
         for key, value in values.items():
             st.session_state[key] = value
+        if pending_inputs is not None:
+            st.session_state.live_voice_transcript = values.get("t1_transcript", "")
+            st.session_state.live_voice_last_text = ""
+            st.session_state.live_voice_analysis = None
+            st.session_state.live_voice_last_analysis_at = None
+            st.session_state.live_voice_last_analysis_len = 0
         st.session_state.input_case_id = case.case_id
 
     def _text_input(label: str, key: str, default: str = "") -> str:
@@ -201,18 +326,18 @@ def render_tab_input(case: BusinessCase, save_case, run_analysis):
         case.business_name = _text_input("사업체명", "t1_business", case.business_name or "")
     with c2:
         case.consultation_date = _date_input("상담 기준일", "t1_date", case.consultation_date or date.today())
+    _render_live_voice_panel(case, save_case)
+    st.divider()
     case.raw_consultation = _text_area("상담 원문", "t1_raw", case.raw_consultation or "", height=200)
     case.consultation_memo = _text_area("상담 메모", "t1_memo", case.consultation_memo or "", height=80)
-    case.transcript = _text_area(
-        "STT Transcript (선택)",
-        "t1_transcript",
-        case.transcript or "",
-        height=80,
-        help="향후 STT 결과가 여기에 들어옵니다.",
-    )
+    case.transcript = st.session_state.get("live_voice_transcript", case.transcript or "")
+    st.session_state.t1_transcript = case.transcript or ""
     if st.button("🔍 상담 케이스 분석하기", type="primary", key="t1_analyze"):
-        if not case.raw_consultation.strip():
-            st.error("상담 원문을 입력해 주세요.")
+        combined_input = "\n".join(
+            part for part in [case.raw_consultation, case.consultation_memo, case.transcript] if part
+        )
+        if not combined_input.strip():
+            st.error("상담 원문 또는 음성 받아쓰기 내용을 입력해 주세요.")
         else:
             run_analysis(case)
             st.success("분석 완료!")
@@ -243,6 +368,262 @@ def render_tab_input(case: BusinessCase, save_case, run_analysis):
                 run_analysis(case)
                 st.rerun()
     save_case(case)
+
+
+def _customer_value(case: BusinessCase, field: str) -> str:
+    value = getattr(case, field, None)
+    if value in (None, "", "미확인"):
+        return "확인 중"
+    if field in {"required_amount", "annual_revenue", "monthly_revenue"} and isinstance(value, int):
+        return format_amount(value)
+    if field == "business_months" and isinstance(value, int):
+        return format_months(value)
+    return str(value)
+
+
+def _customer_field_ready(case: BusinessCase, field: str) -> bool:
+    value = getattr(case, field, None)
+    return value not in (None, "", "미확인")
+
+
+def _status_class(public_status: str) -> str:
+    if public_status == "확인 완료":
+        return "green"
+    if public_status == "공개조건 불일치":
+        return "red"
+    if public_status == "추가 확인 필요":
+        return "yellow"
+    return "gray"
+
+
+def _customer_policy_cards(eligibility_results) -> str:
+    results = list(eligibility_results or [])
+    if not results:
+        return (
+            '<div class="customer-card soft">'
+            '<div class="customer-card-title">정책 검토</div>'
+            '<div class="customer-card-value">분석 대기</div>'
+            '<div class="customer-card-desc">상담사가 상담 내용을 분석하면 검토 가능한 지원정책 후보가 여기에 표시됩니다.</div>'
+            "</div>"
+        )
+
+    scores = score_policy_results(results)
+    status_order = {"확인 완료": 0, "추가 확인 필요": 1, "공개조건 불일치": 2}
+    ranked = sorted(
+        results,
+        key=lambda item: (
+            status_order.get(map_policy_status(item.final_status), 9),
+            -scores.get(item.policy_id, {}).get("score", 0),
+        ),
+    )[:3]
+
+    cards = []
+    for result in ranked:
+        public_status = map_policy_status(result.final_status)
+        score_info = scores.get(result.policy_id, {})
+        score = int(score_info.get("score", 0))
+        grade = html.escape(str(score_info.get("grade", "검토 필요")))
+        reason = html.escape(result.summary_reason or "공개조건 비교 결과를 바탕으로 상담사가 검토 중입니다.")
+        documents = ", ".join((result.required_documents or [])[:3]) or "상담 후 안내"
+        cards.append(
+            '<div class="customer-policy">'
+            '<div class="customer-policy-top">'
+            "<div>"
+            f'<div class="customer-policy-name">{html.escape(result.policy_name)}</div>'
+            f'<div class="customer-policy-meta">{html.escape(result.institution)} · {grade}</div>'
+            "</div>"
+            f'<div class="customer-score">{score}%</div>'
+            "</div>"
+            '<div class="customer-chip-row">'
+            f'<span class="status-pill {_status_class(public_status)}">{html.escape(public_status)}</span>'
+            f'<span class="customer-chip">검토 우선순위 {score}%</span>'
+            "</div>"
+            f'<div class="customer-card-desc">{reason}</div>'
+            f'<div class="customer-card-desc">예상 준비서류: {html.escape(documents)}</div>'
+            "</div>"
+        )
+    return "".join(cards)
+
+
+def render_customer_view(
+    case: BusinessCase,
+    *,
+    analyzed: bool,
+    missing_info,
+    next_questions,
+    eligibility_results,
+) -> None:
+    required_total = len(REQUIRED_FIELDS)
+    ready_count = sum(1 for field, *_ in REQUIRED_FIELDS if _customer_field_ready(case, field))
+    missing_count = len(missing_info or [])
+    progress = round((ready_count / required_total) * 100) if required_total else 0
+    policy_count = len(eligibility_results or [])
+    confirmed_policies = sum(
+        1 for result in (eligibility_results or [])
+        if map_policy_status(result.final_status) == "확인 완료"
+    )
+    conditional_policies = sum(
+        1 for result in (eligibility_results or [])
+        if map_policy_status(result.final_status) == "추가 확인 필요"
+    )
+
+    customer_name = html.escape(case.customer_name or "고객")
+    business_name = html.escape(case.business_name or "사업체")
+    stage_label = "정책 검토 중" if analyzed else "상담 접수 중"
+    step_classes = [
+        "done",
+        "active" if not analyzed else "done",
+        "active" if analyzed and missing_count else ("done" if analyzed else ""),
+        "active" if analyzed and not missing_count else "",
+    ]
+
+    st.markdown(
+        f"""
+        <div class="customer-hero">
+            <div class="customer-hero-top">
+                <div>
+                    <div class="customer-kicker">CUSTOMER VIEW</div>
+                    <div class="customer-title">{customer_name}님 상담 진행 현황</div>
+                    <div class="customer-subtitle">{business_name} 기준으로 확인된 정보와 다음 준비사항을 정리했습니다. 최종 신청 가능 여부는 상담사가 공식 공고와 제출서류를 확인한 뒤 안내합니다.</div>
+                </div>
+                <div class="customer-percent">{progress}%</div>
+            </div>
+            <div class="customer-bar"><div class="customer-bar-fill" style="width:{progress}%;"></div></div>
+            <div class="customer-chip-row">
+                <span class="customer-chip">현재 단계 {html.escape(stage_label)}</span>
+                <span class="customer-chip">확인된 정보 {ready_count}/{required_total}</span>
+                <span class="customer-chip">추가 확인 {missing_count}</span>
+                <span class="customer-chip">검토 정책 {policy_count}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="customer-steps">
+            <div class="customer-step {step_classes[0]}">
+                <div class="customer-step-label">1. 상담 접수</div>
+                <div class="customer-step-desc">상담 내용과 사업 기본정보를 모으는 단계입니다.</div>
+            </div>
+            <div class="customer-step {step_classes[1]}">
+                <div class="customer-step-label">2. 정보 확인</div>
+                <div class="customer-step-desc">지역, 업종, 업력, 자금용도 등 필수 조건을 확인합니다.</div>
+            </div>
+            <div class="customer-step {step_classes[2]}">
+                <div class="customer-step-label">3. 정책 비교</div>
+                <div class="customer-step-desc">공개조건 기준으로 검토 가능한 지원정책을 좁힙니다.</div>
+            </div>
+            <div class="customer-step {step_classes[3]}">
+                <div class="customer-step-label">4. 신청 준비</div>
+                <div class="customer-step-desc">필요서류와 다음 행동을 정리해 신청 준비로 연결합니다.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="customer-grid">', unsafe_allow_html=True)
+    cards = [
+        ("업종", _customer_value(case, "industry"), "사업자등록증 기준으로 최종 확인합니다."),
+        ("운영 지역", _customer_value(case, "region"), "지역별 보증·정책자금 조건에 사용됩니다."),
+        ("업력", _customer_value(case, "business_months"), "업력 제한 조건 비교에 사용됩니다."),
+        ("자금 용도", _customer_value(case, "funding_purpose"), "운영자금·시설자금 등 상품 매칭 기준입니다."),
+    ]
+    cols = st.columns(4)
+    for col, (title, value, desc) in zip(cols, cards):
+        with col:
+            st.markdown(
+                f"""
+                <div class="customer-card">
+                    <div class="customer-card-title">{html.escape(title)}</div>
+                    <div class="customer-card-value">{html.escape(value)}</div>
+                    <div class="customer-card-desc">{html.escape(desc)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    metric_cols = st.columns(3)
+    with metric_cols[0]:
+        st.markdown(
+            f"""
+            <div class="customer-card soft">
+                <div class="customer-card-title">검토 가능 후보</div>
+                <div class="customer-card-value">{confirmed_policies}건</div>
+                <div class="customer-card-desc">현재 공개조건 기준으로 확인 완료에 가까운 정책입니다.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with metric_cols[1]:
+        st.markdown(
+            f"""
+            <div class="customer-card soft">
+                <div class="customer-card-title">추가 확인 후보</div>
+                <div class="customer-card-value">{conditional_policies}건</div>
+                <div class="customer-card-desc">서류나 세부 조건 확인 후 판단할 정책입니다.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with metric_cols[2]:
+        st.markdown(
+            f"""
+            <div class="customer-card soft">
+                <div class="customer-card-title">남은 확인사항</div>
+                <div class="customer-card-value">{missing_count}개</div>
+                <div class="customer-card-desc">빠르게 답변할수록 정책 비교 정확도가 올라갑니다.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="customer-section-title">고객님께 중요한 다음 확인사항</div>', unsafe_allow_html=True)
+    question_items = list(next_questions or [])[:4]
+    if question_items:
+        list_html = "".join(
+            f"<li>{html.escape(item.question)} <span style='color:#667085;'>({html.escape(item.related_policy)})</span></li>"
+            for item in question_items
+        )
+    else:
+        list_html = "<li>현재 추가 질문은 크지 않습니다. 상담사가 공식 공고와 제출서류 기준으로 한 번 더 확인합니다.</li>"
+    st.markdown(
+        f"""
+        <div class="customer-card">
+            <ul class="customer-list">{list_html}</ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="customer-section-title">지원정책 검토 요약</div>', unsafe_allow_html=True)
+    st.markdown(_customer_policy_cards(eligibility_results), unsafe_allow_html=True)
+
+    docs: list[str] = []
+    for result in eligibility_results or []:
+        for doc in result.required_documents or []:
+            if doc and doc not in docs:
+                docs.append(doc)
+            if len(docs) >= 6:
+                break
+        if len(docs) >= 6:
+            break
+    if not docs:
+        docs = ["사업자등록증", "대표자 신분증", "매출 확인자료", "신청기관 양식"]
+    st.markdown('<div class="customer-section-title">미리 준비하면 좋은 자료</div>', unsafe_allow_html=True)
+    doc_html = "".join(f"<li>{html.escape(doc)}</li>" for doc in docs)
+    st.markdown(
+        f"""
+        <div class="customer-card">
+            <ul class="customer-list">{doc_html}</ul>
+            <div class="customer-card-desc">실제 필요서류는 선택한 정책과 기관 안내에 따라 달라질 수 있습니다.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _case_structure_fields() -> list[tuple[str, str]]:
