@@ -58,9 +58,9 @@ from utils.constants import (
     FIELD_SOURCE_OPTIONS,
     FIELD_STATUS_OPTIONS,
     RAG_SCORE_LABEL,
-    REQUIRED_FIELDS,
 )
 from utils.formatters import format_amount, format_months
+from utils.profile_progress import structured_profile_progress
 
 # Import shared handlers from app module at runtime to avoid circular imports
 ROOT = Path(__file__).resolve().parent
@@ -456,11 +456,6 @@ def _customer_value(case: BusinessCase, field: str) -> str:
     return str(value)
 
 
-def _customer_field_ready(case: BusinessCase, field: str) -> bool:
-    value = getattr(case, field, None)
-    return value not in (None, "", "미확인")
-
-
 def _status_class(public_status: str) -> str:
     if public_status == "확인 완료":
         return "green"
@@ -528,10 +523,12 @@ def render_customer_view(
     next_questions,
     eligibility_results,
 ) -> None:
-    required_total = len(REQUIRED_FIELDS)
-    ready_count = sum(1 for field, *_ in REQUIRED_FIELDS if _customer_field_ready(case, field))
+    progress_info = structured_profile_progress(case)
+    required_total = int(progress_info["total"])
+    ready_count = int(progress_info["confirmed"])
+    needs_review_count = int(progress_info["needs_review"])
     missing_count = len(missing_info or [])
-    progress = round((ready_count / required_total) * 100) if required_total else 0
+    progress = int(progress_info["percent"])
     policy_count = len(eligibility_results or [])
     confirmed_policies = sum(
         1 for result in (eligibility_results or [])
@@ -567,7 +564,7 @@ def render_customer_view(
             <div class="customer-chip-row">
                 <span class="customer-chip">현재 단계 {html.escape(stage_label)}</span>
                 <span class="customer-chip">확인된 정보 {ready_count}/{required_total}</span>
-                <span class="customer-chip">추가 확인 {missing_count}</span>
+                <span class="customer-chip">추가 확인 {needs_review_count}</span>
                 <span class="customer-chip">검토 정책 {policy_count}</span>
             </div>
         </div>

@@ -10,7 +10,8 @@ import streamlit as st
 from models.schemas import BusinessCase
 from services.status_mapper import map_policy_status
 from utils.brand_assets import brand_logo_data_uri
-from utils.constants import REQUIRED_FIELDS, SERVICE_NAME
+from utils.constants import SERVICE_NAME
+from utils.profile_progress import structured_profile_progress
 
 
 ACCENT_BLUE = "#2563EB"
@@ -1004,40 +1005,6 @@ def render_workflow_strip(active_tab: str) -> None:
     st.markdown(f"<div class=\"workflow-strip\">{''.join(cards)}</div>", unsafe_allow_html=True)
 
 
-def _has_structured_value(case: BusinessCase, field: str) -> bool:
-    value = getattr(case, field, None)
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    return True
-
-
-def _structure_progress(case: BusinessCase) -> dict[str, int]:
-    total = len(REQUIRED_FIELDS)
-    filled = sum(1 for field, *_ in REQUIRED_FIELDS if _has_structured_value(case, field))
-    verified_statuses = {"확인됨", "서류 확인", "기관 확인"}
-    review_statuses = {"미확인", "추가 확인 필요"}
-    verified = sum(
-        1
-        for field, *_ in REQUIRED_FIELDS
-        if _has_structured_value(case, field) and (case.field_status or {}).get(field) in verified_statuses
-    )
-    needs_review = sum(
-        1
-        for field, *_ in REQUIRED_FIELDS
-        if (not _has_structured_value(case, field)) or (case.field_status or {}).get(field, "미확인") in review_statuses
-    )
-    percent = round((filled / total) * 100) if total else 0
-    return {
-        "total": total,
-        "filled": filled,
-        "verified": verified,
-        "needs_review": needs_review,
-        "percent": max(0, min(100, percent)),
-    }
-
-
 def render_quality_metrics(
     case: BusinessCase,
     missing_count: int,
@@ -1045,34 +1012,33 @@ def render_quality_metrics(
     eligibility_results: list | None = None,
     recommendation_count: int = 0,
 ) -> None:
-    progress = _structure_progress(case)
+    progress = structured_profile_progress(case)
+    total = int(progress["total"])
+    confirmed = int(progress["confirmed"])
+    needs_review = int(progress["needs_review"])
+    partial = int(progress["partial"])
+    percent = int(progress["percent"])
     st.markdown(
         f"""
         <div class="structure-progress">
             <div class="structure-progress-head">
                 <div>
                     <div class="structure-progress-title">상담 프로필 구조화</div>
-                    <div class="structure-progress-note">필수 항목 {progress["filled"]}/{progress["total"]} · 확인 {progress["verified"]} · 보완 {progress["needs_review"]}</div>
+                    <div class="structure-progress-note">필수 항목 {confirmed}/{total} · 보완 {needs_review}</div>
                 </div>
-                <div class="structure-progress-percent">{progress["percent"]}%</div>
+                <div class="structure-progress-percent">{percent}%</div>
             </div>
             <div class="structure-progress-track">
-                <div class="structure-progress-fill" style="width: {progress["percent"]}%;"></div>
+                <div class="structure-progress-fill" style="width: {percent}%;"></div>
             </div>
             <div class="structure-progress-meta">
-                <span class="structure-progress-tag">입력 {progress["filled"]}</span>
-                <span class="structure-progress-tag">미입력 {progress["total"] - progress["filled"]}</span>
-                <span class="structure-progress-tag">추가 확인 {progress["needs_review"]}</span>
+                <span class="structure-progress-tag">확인 {confirmed}</span>
+                <span class="structure-progress-tag">추가 확인 {needs_review}</span>
+                <span class="structure-progress-tag">값 있음·미확인 {partial}</span>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
-    )
-    verified_statuses = {"확인됨", "서류 확인", "기관 확인"}
-    verified = sum(
-        1
-        for field, status in (case.field_status or {}).items()
-        if status in verified_statuses and getattr(case, field, None) not in (None, "")
     )
     results = eligibility_results or []
     actionable_count = sum(
@@ -1082,8 +1048,8 @@ def render_quality_metrics(
     )
     candidate_count = recommendation_count or actionable_count
     cards = [
-        ("확인된 정보", str(verified), "상담 원문·서류·기관 기준"),
-        ("추가 확인", str(missing_count), "다음 질문/서류 확인 대상"),
+        ("확인된 정보", str(confirmed), "13개 구조화 항목 기준"),
+        ("추가 확인", str(needs_review), "미확인·보완 필요 항목"),
         ("추천 후보", str(candidate_count), "확인 완료·추가 확인 정책"),
         ("정책 DB", str(policy_count), "현재 불러온 전체 정책"),
     ]
