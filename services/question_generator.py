@@ -36,6 +36,8 @@ POLICY_RELATED = {
     "business_status": "휴폐업 제외조건",
 }
 
+QUESTION_EXCLUDED_FIELDS = {"existing_loan"}
+
 
 def generate_next_questions(
     case: BusinessCase,
@@ -50,6 +52,8 @@ def generate_next_questions(
 
     for item in missing_items:
         field = item.field_name
+        if field in QUESTION_EXCLUDED_FIELDS:
+            continue
         priority = PRIORITY_MAP.get(field, "중간")
         related = POLICY_RELATED.get(field, "정책 조건 검토")
         questions.append(

@@ -6,9 +6,14 @@ from models.schemas import BusinessCase, MissingInfoItem
 from utils.constants import REQUIRED_FIELDS, UNKNOWN
 
 
+QUESTION_EXCLUDED_FIELDS = {"existing_loan"}
+
+
 def detect_missing_info(case: BusinessCase) -> list[MissingInfoItem]:
     items: list[MissingInfoItem] = []
     for field, label, reason, question in REQUIRED_FIELDS:
+        if field in QUESTION_EXCLUDED_FIELDS:
+            continue
         val = getattr(case, field, None)
         if val is None or val == "" or val == UNKNOWN:
             items.append(

@@ -649,6 +649,11 @@ def inject_global_styles() -> None:
         [data-testid="stTextArea"] textarea, [data-testid="stTextInput"] input {{
             border-radius: 10px;
         }}
+        [data-testid="stTextArea"] textarea[aria-label="고객 안내문"] {{
+            color: #111827 !important;
+            -webkit-text-fill-color: #111827 !important;
+            opacity: 1 !important;
+        }}
         div[data-testid="stAlert"] {{
             border-radius: 10px;
             border-width: 1px;

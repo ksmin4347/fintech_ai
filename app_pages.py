@@ -179,9 +179,9 @@ def _style_status_rows(df: pd.DataFrame, status_col: str):
     def _row_style(row):
         status = str(row.get(status_col, ""))
         if status in ("미확인", "추가 확인 필요"):
-            return ["background-color: rgba(255, 92, 92, 0.10);" for _ in row]
+            return ["background-color: rgba(248, 113, 113, 0.32); color: #7f1d1d;" for _ in row]
         if status == "공개조건 불일치":
-            return ["background-color: rgba(255, 92, 92, 0.16);" for _ in row]
+            return ["background-color: rgba(248, 113, 113, 0.38); color: #7f1d1d;" for _ in row]
         if status == "확인 완료":
             return ["background-color: rgba(3, 199, 90, 0.10);" for _ in row]
         return ["" for _ in row]

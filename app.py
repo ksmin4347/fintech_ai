@@ -36,7 +36,7 @@ from services.policy_rationale import build_recommendation_rationale
 from services.status_mapper import is_verified_field_status, map_policy_status
 from models.schemas import BusinessCase
 from utils.brand_assets import brand_logo_data_uri
-from utils.constants import DEMO_NOTICE, DISCLAIMER, SERVICE_NAME, SERVICE_TAGLINE
+from utils.constants import DEMO_NOTICE, DISCLAIMER, SERVICE_NAME, SERVICE_TAGLINE, UNKNOWN
 from utils.ui_theme import (
     inject_global_styles,
     policy_card_html,
@@ -212,7 +212,9 @@ def run_analysis(case: BusinessCase):
             continue
         previous_value = getattr(case, field, None)
         manually_reviewed = previous_status.get(field) not in (None, "", "미확인")
-        if previous_value not in (None, "") and (is_verified_field_status(previous_status.get(field)) or manually_reviewed):
+        if previous_value not in (None, "", UNKNOWN) and (
+            is_verified_field_status(previous_status.get(field)) or manually_reviewed
+        ):
             continue
         if val is not None and hasattr(case, field):
             setattr(case, field, val)
